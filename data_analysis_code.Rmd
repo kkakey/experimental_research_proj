@@ -1,0 +1,2124 @@
+---
+title: "Data Analysis"
+Date: 11/19/2019
+Name: Kristen A
+output:
+  word_document: default
+  html_document: default
+Professor: Donald Green
+Class: 'POLS-UN3768: Experimental Research'
+---
+
+
+
+```{r setup, include=FALSE, message=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Replication code for the project and paper "Priming Public Opinion"for Professor Donald Green's fall 2019 course, POLS-UN3768: Experimental Research.
+
+
+********************************************************
+
+
+
+```{r}
+library(haven, lubridate)
+library(dplyr)
+library(tidyverse)
+library(RPMG)
+library(knitr)
+library(kableExtra)
+library(naniar)
+library(dummies)
+library(ggplot2)
+library(ggthemes)
+df <- read_spss("data_final.sav")
+```
+
+
+
+```{r}
+df <- 
+    df %>% 
+        dplyr::filter(StartDate > lubridate::as_date("2019-11-24")) #start day of survey
+df <- df[-(1:2), , drop = FALSE] #remove two test surveys completed that day
+```
+
+
+
+Remove potential rows with NA (meaning the individual did not receive a treatment or control)
+```{r}
+df <-
+  df %>%
+    filter((!is.na(ClimateChange_Priming_DO_cc_control) | !is.na(ClimateChange_Priming_DO_cc_t1) |
+              !is.na(ClimateChange_Priming_DO_cc_t2)),
+          (!is.na(Democratic_Debate_Video_DO_debate_control) | !is.na(Democratic_Debate_Video_DO_debate_noah_t1) |
+             !is.na(Democratic_Debate_Video_DO_debate_fox_t2)),
+          (!is.na(Healthcare_Priming_DO_health_control) | !is.na(Healthcare_Priming_DO_health_approve_t1) |
+             !is.na(Healthcare_Priming_DO_health_disapprove_t2)),
+          (!is.na(Impeachment_Priming_DO_impeach_control) | !is.na(Impeachment_Priming_DO_impeach_approve_t1) |
+             !is.na(Impeachment_Priming_DO_impeach_demapprove_t)))
+```
+
+
+
+Treatment Vectors --- 1 if the treatment was received, 0 if otherwise
+```{r}
+#Climate Change
+df$treat_cc_t1 <- as.integer(!is.na(df$ClimateChange_Priming_DO_cc_t1) & df$ClimateChange_Priming_DO_cc_t1 == 1)
+df$treat_cc_t2 <- as.integer(!is.na(df$ClimateChange_Priming_DO_cc_t2) & df$ClimateChange_Priming_DO_cc_t2 == 1)
+
+#Feelings Towards Selection of Democratic Presidential Candidates
+df$treat_debate_noah_t1 <- as.integer(!is.na(df$Democratic_Debate_Video_DO_debate_noah_t1) & df$Democratic_Debate_Video_DO_debate_noah_t1 == 1)
+df$treat_debate_fox_t2 <- as.integer(!is.na(df$Democratic_Debate_Video_DO_debate_fox_t2) & df$Democratic_Debate_Video_DO_debate_fox_t2 == 1)
+
+#Healthcare
+df$treat_health_approve_t1 <- as.integer(!is.na(df$Healthcare_Priming_DO_health_approve_t1) & df$Healthcare_Priming_DO_health_approve_t1 == 1)
+df$treat_health_disapprove_t2 <- as.integer(!is.na(df$Healthcare_Priming_DO_health_disapprove_t2 ) & df$Healthcare_Priming_DO_health_disapprove_t2 == 1)
+
+#Impeachment
+df$treat_impeach_approve_t1 <- as.integer(!is.na(df$Impeachment_Priming_DO_impeach_approve_t1) & df$Impeachment_Priming_DO_impeach_approve_t1 == 1)
+df$treat_impeach_demapprove_t <- as.integer(!is.na(df$Impeachment_Priming_DO_impeach_demapprove_t) & df$Impeachment_Priming_DO_impeach_demapprove_t == 1)
+```
+
+
+
+## Cleaning
+
+Remap Healthcare/Climate Change Treatment 2 values to match the ordering of Treatment 1 and Controls
+```{r warning=FALSE}
+df$health_disapprove_t2 <- plyr::mapvalues(df$health_disapprove_t2, from = c(1,2), to = c(2, 1))
+  #labels are wrong, mapping is correct df$health_disapprove_t2: (Approve = 1, Disapprove = 2)
+
+df$cc_t2 <- plyr::mapvalues(df$cc_t2, from = c(1,2), to = c(2, 1))
+  #labels are wrong, mapping is correct df$cc_t2 : (Realistic = 1, Unrealistic = 2)
+```
+
+
+
+Collect responses into single vector for each issue
+```{r warning=FALSE}
+health_v <- list(df$health_control, df$health_approve_t1, df$health_disapprove_t2)
+# df$health_response <- coalesce(health_v)
+
+
+df <- transform(df, health_control = as.vector(health_control), 
+                    health_approve_t1 = as.vector(health_approve_t1),
+                    health_disapprove_t2 = as.vector(health_disapprove_t2),
+                    impeach_control = as.vector(impeach_control),
+                    impeach_approve_t1 = as.vector(impeach_approve_t1),
+                    impeach_demapprove_t = as.vector(impeach_demapprove_t),
+                    cc_control = as.vector(cc_control),
+                    cc_t1 = as.vector(cc_t1),
+                    cc_t2 = as.vector(cc_t2)
+                )
+
+df <- df %>%
+  mutate(health_response = coalesce(health_control, health_approve_t1, health_disapprove_t2), 
+        impeach_response = coalesce(impeach_control,impeach_approve_t1,impeach_demapprove_t),
+        climate_response = coalesce(cc_control,cc_t1,cc_t2)
+        )
+```
+
+
+
+Replace "No opinion" responses with NA ---- outcome variable (df$health_response)
+```{r}
+df$health_response %>%
+  replace(., .==3, NA) -> df$health_rep_dummy 
+```
+
+Replace "Unsure" responses with NA ---- outcome variable (df$cc_response)
+```{r}
+df$climate_response %>%
+  replace(., .==3, NA) -> df$cc_rep_dummy 
+```
+
+
+
+"No opinion" Vector ---- df$health_rep_noopin
+```{r}
+df$health_rep_noopin <- ifelse(df$health_response==3, 1, 0)
+```
+
+"Unsure" Vector ---- df$cc_rep_nounsure
+```{r}
+df$cc_rep_nounsure <- ifelse(df$climate_response==3, 1, 0)
+```
+
+
+
+Create dummy varialbes of impeach_response 
+```{r warning=FALSE}
+impeach_dummy_matrix <- dummy(df$impeach_response)
+df$impeach_response1 <- impeach_dummy_matrix[,1] 
+df$impeach_response3 <- impeach_dummy_matrix[,3] 
+
+
+#impeach_response1 --- 1 Impeached and removed, 0 otherwise
+#impeach_response3 --- 1 Not impeached at all, 0 otherwise
+```
+
+
+
+Categorize Democratic Selection Feeling Thermomemter
+```{r}
+df <- df %>% 
+  mutate(dem_feel_4=cut(dem_feelings_1, breaks=c(0, 25, 50, 75, 100), 
+                      labels=c("0-25", "26-30", "31-75", "76-100")))
+df$dem_feel_4 <- as_factor(df$dem_feel_4)
+
+df$dem_feel_4int <- as.integer(df$dem_feel_4)
+
+#df$dem_feel_4.f <- factor(df$dem_feel_4)
+
+typeof(df$dem_feel_4)
+
+#df$dem_feel_4TEST <- factor(c("0-25","26-30","31-75","76-100"))
+```
+
+
+## Recode Outcome variables 0, 1
+```{r}
+df$health_rep_dummy[df$health_rep_dummy==1] = 1
+df$health_rep_dummy[df$health_rep_dummy==2] = 0
+  #1 = Approve
+  #0 = Disapprove
+
+df$cc_rep_dummy[df$cc_rep_dummy==1] = 1
+df$cc_rep_dummy[df$cc_rep_dummy==2] = 0
+  #1 = Realistic
+  #0 = Unrealistic
+
+df$dem_feelings_1 <- RESCALE(df$dem_feelings_1, 0, 1, 0, 100)
+```
+
+
+
+## Covariates
+
+  Partisanship and Ideology
+```{r}
+#very liberal Democrat
+#df$vlib_dem <- ifelse(df$ideology==5 & df$partisanship==2, 1, 0)
+
+#liberal and Democrat
+df$lib_dem <- ifelse(df$ideology>=4 & df$partisanship==2, 1, 0)
+
+#liberal, not Democrat
+df$lib_notdem <- ifelse(df$ideology>=4 & !df$partisanship==2, 1, 0)
+
+
+df$very_liberal <- ifelse(df$ideology==5, 1, 0)
+
+
+#conservative indicator variable
+df$conservative <- ifelse(df$ideology<=2, 1, 0)
+
+#moderate indicator variable
+df$moderate <- ifelse(df$ideology==3, 1, 0)
+
+  #moderate + Independent indicator variable
+  df$moderate_I <- ifelse(df$ideology==3 & df$partisanship==3, 1, 0)
+    # 4 moderates who are not Independent
+
+#liberal indicator variable
+df$liberal <- ifelse(df$ideology>=4, 1, 0)
+
+
+#liberaal and/or Democrat
+df$ld <- ifelse((df$ideology>=4) | (df$partisanship==2), 1, 0)
+
+
+#3 party variable (remove other)
+df$party <- plyr::mapvalues(df$partisanship, from = c(1,2,3), to = c(1, 3, 2))
+df$party <- replace(df$party, df$party==4, NA)
+    #1=Republican, 2=Independent, 3=Democrat
+
+
+sum(df$liberal - (df$party==3), na.rm=T) # 7 liberals who aren't Democrats
+sum((df$party==2) - df$moderate, na.rm=T) # 8 Independents who aren't moderate (1 conservative, 7 liberal)
+
+
+```
+
+
+
+  Political Awareness Questions 
+```{r}
+df <-
+  df %>%
+    #all three answered correctly
+  mutate(poli_know3 = ifelse(  ((secretary_state==4) & (gorsuch==2) & (employ_rate==1)), 1 , 0)) %>%
+  
+  
+      #only two answered correctly
+  mutate(poli_know2only = ifelse(
+                            ((secretary_state==4) & (gorsuch!=2) & (employ_rate==1) ) | 
+                            (  (secretary_state!=4) & (gorsuch==2) & (employ_rate==1)) |
+                            ( (gorsuch==2) & (secretary_state==4) & (employ_rate!=1))
+                            , 1 , 0)) %>%
+
+    #at least two answered correctly
+  mutate(poli_know2 = ifelse(
+                            ((secretary_state==4) & (gorsuch==2) | (employ_rate==1)) | 
+                            ((secretary_state==4) | (gorsuch==2) & (employ_rate==1)) |
+                            ((gorsuch==2) | (secretary_state==4) & (employ_rate==1)) |
+                            ((secretary_state==4) & (gorsuch==2) & (employ_rate==1)) #or all three
+                            , 1 , 0)) %>%
+  
+
+    #one answered correctly
+  mutate(poli_know1only = ifelse(
+                            ( (secretary_state==4) & (gorsuch!=2) & (employ_rate!=1) ) |
+                            ( (secretary_state!=4) & (gorsuch==2) & (employ_rate!=1) ) |
+                            ( (gorsuch!=2) & (secretary_state!=4) & (employ_rate==1) )
+                            , 1 , 0))   %>%
+  
+  
+    #one or none answer correctly
+  mutate(poli_know1 = ifelse(
+                            ( (secretary_state==4) & (gorsuch!=2) & (employ_rate!=1)) |
+                            ( (secretary_state!=4) & (gorsuch==2) & (employ_rate!=1) ) |
+                            ((gorsuch!=2) & (secretary_state!=4) & (employ_rate==1)) |
+                            ((gorsuch!=2) & (secretary_state!=4) & (employ_rate!=1)) #none correct
+                            , 1 , 0)) %>%
+  
+      #none answered correctly
+  mutate(poli_know_none = ifelse(
+                            ((gorsuch!=2) & (secretary_state!=4) & (employ_rate!=1))
+                            , 1 , 0))
+
+
+df %>%
+  select(gorsuch,secretary_state,  employ_rate, poli_know2only) %>%
+  arrange(desc(poli_know2only))
+
+
+df %>%
+  select(poli_know_none, poli_know1only, poli_know2only, poli_know3) 
+#poli_know3, poli_know2only, poli_know2, poli_know1)
+```
+
+
+Creating a plot - how many questions people got correct 
+```{r}
+none_tot <- sum(as.numeric(df$poli_know_none), na.rm = TRUE)
+one_tot <- sum(as.numeric(df$poli_know1only), na.rm = TRUE)
+two_tot <- sum(as.numeric(df$poli_know2only), na.rm = TRUE)
+three_tot <- sum(as.numeric(df$poli_know3), na.rm = TRUE)
+
+   #character vector
+poli_q_num <- c('None', 'One', 'Two', 'Three')
+  #total values
+poli_correct <- c(none_tot, one_tot, two_tot, three_tot)
+  #the dataframe 
+poli_c_df <- data.frame(poli_q_num, poli_correct)
+
+  #manually order poli_q_num
+poli_c_df$poli_q_num <- factor(poli_c_df$poli_q_num,                                    
+                  levels = c("None", "One", "Two", "Three"))
+
+
+ggplot(poli_c_df, aes(poli_q_num, poli_correct)) +geom_bar(stat = "identity", col="black") +
+  geom_text(aes(label=poli_correct),
+            position = position_dodge(width = .9),    # move to center of bars
+            vjust = -0.5,    # nudge above top of bar
+            size = 3) +
+  theme_hc()+ scale_colour_hc() +
+  xlab("Number of Questions Answered Correctly") +
+  ylab("Frequency") +
+  ggtitle("Political Knowledge Questions Answered Correctly")
+
+
+poli_c_df <- 
+  poli_c_df %>%
+  mutate(pct = poli_correct/97)
+
+ggplot(poli_c_df, aes(poli_q_num, poli_correct, label = scales::percent(pct))) +
+  geom_bar(position = position_dodge(width = 1), stat = "identity", col="black") +
+  geom_text(aes(label=poli_correct),
+            position = position_dodge(width = .9),    # move to center of bars
+            vjust = -0.5,    # nudge above top of bar
+            size = 3) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  theme_hc()+ scale_colour_hc() +
+  xlab("Number of Questions Answered Correctly") +
+  ylab("Frequency") +
+  ggtitle("Political Knowledge Questions Answered Correctly")
+
+
+ggplot(poli_c_df, aes(x = poli_q_num, y = poli_correct, label = scales::percent(pct))) +
+  geom_bar(position = position_dodge(width = 1), width=0.6, stat = "identity",
+           col="black") + 
+  geom_text(position = position_dodge(width = .9),    # move to center of bars
+            vjust = -0.7,    # nudge above top of bar
+            size = 3.5) + 
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ylab("Percentage of Participants") +
+  xlab("Number of Questions Answered Correctly") + 
+  theme_hc()+ scale_colour_hc() +
+  ggtitle("Political Knowledge Questions Answered Correctly")
+
+```
+
+
+
+
+Creating a plot of which questions people answered correctly
+```{r}
+df <-
+  df %>%
+    # Indicator variable - 1= Answered Correctly, 0 = Wrong
+  mutate(secretary_state_dummy = ifelse(secretary_state==4, 1, 0)) %>%
+  mutate(gorsuch_dummy = ifelse(gorsuch==2, 1, 0)) %>%
+  mutate(employ_rate_dummy = ifelse(employ_rate==1, 1, 0)) 
+
+
+grosuch_correct_tot <- sum(as.numeric(df$gorsuch_dummy), na.rm = TRUE)
+secretary_state_correct_tot <- sum(as.numeric(df$secretary_state_dummy), na.rm = TRUE)
+employ_rate_correct_tot <- sum(as.numeric(df$employ_rate_dummy), na.rm = TRUE)
+
+  #character vector
+poli_q <- c('Gorsuch', 'Secretary of State', 'Unemployment Rate')
+  #total values
+poli_tot <- c(grosuch_correct_tot, secretary_state_correct_tot, employ_rate_correct_tot)
+  #the dataframe 
+poli_q_df <- data.frame(poli_q, poli_tot)
+
+poli_q_df <- 
+  poli_q_df %>%
+  mutate(pct = poli_tot/97)
+
+
+ggplot(poli_q_df, aes(x = poli_q, y = poli_tot, label = scales::percent(pct))) +
+  geom_bar(position = position_dodge(width = 1), width=0.6, stat = "identity",
+           col="black") + 
+  geom_text(position = position_dodge(width = .9),    # move to center of bars
+            vjust = -0.7,    # nudge above top of bar
+            size = 3.5) + 
+  #scale_y_continuous(labels = function(x) paste0(x)) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ylab("Answered Correctly") +
+  xlab("Political Knowledge Question") + 
+  theme_hc()+ scale_colour_hc() +
+  theme(plot.margin = unit(c(.2, 3.5, 0, 3.5), "cm")) +
+  ggtitle("Political Knowledge Question Answered Correctly") +
+  theme(plot.title = element_text(hjust = 0.5))
+  
+
+```
+
+
+
+
+
+  News Consumption
+```{r}
+df$news
+
+
+# news consumer indicator (>= somewhat agree )
+df$news_agree <- ifelse(df$news>=5, 1, 0)
+df$news_agreemore <- ifelse(df$news>=6, 1, 0)
+
+# some news consumer indicator
+df$news_some <- ifelse(df$news>=3 & df$news<=5, 1, 0)
+
+# Disagree news consumer indicator
+df$news_disagree <- ifelse(df$news<=2, 1, 0)
+
+
+# More agree news consumption AND political knowledge
+df$mnews_poliknow <- ifelse(df$news_agreemore==1 & df$poli_know3==1, 1, 0)
+
+# More agree news consumption AND 2 political knowledge
+df$mnews_poliknow2 <- ifelse(df$news_agreemore==1 & df$poli_know2only==1, 1, 0)
+
+# More agree news consumption AND 1 or no political knowledge
+df$mnews_poliknow1 <- ifelse(df$news_agreemore==1 & df$poli_know1==1, 1, 0)
+
+
+#10 (out of 28) who got all political knowledge questions correct did not agree or agree strongly with being a news consumer
+# 64% agreed or agreed strongly with being a news consumer
+(sum(df$poli_know3, na.rm = T)) - (sum(df$mnews_poliknow, na.rm = T) )
+
+# 17 (out of 25) who got 2 political knowledget questions correct did not agree or agree strongly with being a news consumer
+# 32% agreed or agreed strongly with being a news consumer
+(sum(df$poli_know2only, na.rm = T)) - (sum(df$mnews_poliknow2, na.rm = T) )
+
+# 28 (out of 37) who got one or no political knowledge questions did not agree or agree strongly with being a news consumer
+# 24% agreed or agreed strongly with being a news consumer
+(sum(df$poli_know1, na.rm = T)) - (sum(df$mnews_poliknow1, na.rm = T) )
+
+
+
+
+
+
+
+# Agree news consumption AND political knowledge
+df$news_poliknow <- ifelse(df$news_agree==1 & df$poli_know3==1, 1, 0)
+
+# Agree news consumption AND 2 political knowledge
+df$news_poliknow2 <- ifelse(df$news_agree==1 & df$poli_know2only==1, 1, 0)
+
+# Agree news consumption AND 1 or no political knowledge
+df$news_poliknow1 <- ifelse(df$news_agree==1 & df$poli_know1==1, 1, 0)
+sum(df$news_poliknow1, na.rm=T)
+
+#only 2 (out of 28) who got all political knowledge questions correct did not agree with being a news consumer
+# 26 (out of 28) who got all political knowledge questions correct DID AGREE with being a news consumer
+(sum(df$poli_know3, na.rm = T)) - (sum(df$news_poliknow, na.rm = T) )
+
+# 7 (out of 25) who got 2 political knowledget questions correct did not agree with being a news consumer
+# 18 (out of 25) who got 2 political knowledget questions correct DID AGREE with being a news consumer
+(sum(df$poli_know2only, na.rm = T)) - (sum(df$news_poliknow2, na.rm = T) )
+
+# 10 (out of 37) who got one or no political knowledge questions did not agree with being a news consumer
+# 27 (out of 37) who got one or no political knowledge questions DID AGREE with being a news consumer
+(sum(df$poli_know1, na.rm = T)) - (sum(df$news_poliknow1, na.rm = T) )
+
+
+
+
+# 45 (out of 76) who agreed they stay up-to-date with the news did not get all three poli knowledge q correct
+df$check <- ifelse(df$news_agree==1 & df$poli_know3==0, 1, 0)
+sum(df$news_agree==1, na.rm=T)
+
+# Disagree news consumption AND low political knowledge
+df$no_news_poliknow <- ifelse(df$news_disagree==1 & df$poli_know3==0, 1, 0)
+```
+
+
+
+
+
+
+
+
+
+## Outcome Variable Tables
+
+Table Template - construct for each of the treatment groups:
+
+treat_cc_t1 
+treat_cc_t2 
+
+treat_debate_noah_t1 
+treat_debate_fox_t2 
+
+treat_health_approve_t1
+treat_health_disapprove_t2 
+
+treat_impeach_approve_t1 
+treat_impeach_demapprove_t 
+
+
+
+
+Treatment dataframes --- 1 if the treatment was received, 0 if control
+```{r}
+#Climate Change
+
+df_cc_t1 <-
+  df %>% dplyr::filter(!(treat_cc_t1 == 0 & treat_cc_t2 == 1))
+df_cc_t2 <-
+  df %>% dplyr::filter(!(treat_cc_t1 == 1 & treat_cc_t2 == 0))
+
+#Democratic Selection
+df_dem_t1 <-
+  df %>% dplyr::filter(!(treat_debate_noah_t1 == 0 & treat_debate_fox_t2 == 1))
+df_dem_t2 <-
+  df %>% dplyr::filter(!(treat_debate_noah_t1 == 1 & treat_debate_fox_t2 == 0))
+
+#Healthcare
+df_health_t1 <-
+  df %>% dplyr::filter(!(treat_health_approve_t1 == 0 & treat_health_disapprove_t2  == 1))
+df_health_t2 <-
+  df %>% dplyr::filter(!(treat_health_approve_t1 == 1 & treat_health_disapprove_t2  == 0))
+
+
+#Impeachment
+df_impeach_t1 <-
+  df %>% dplyr::filter(!(treat_impeach_approve_t1 == 0 & treat_impeach_demapprove_t  == 1))
+df_impeach_t2 <-
+  df %>% dplyr::filter(!(treat_impeach_approve_t1 == 1 & treat_impeach_demapprove_t  == 0))
+```
+
+
+
+
+RENEWABLE ENERGY
+```{r}
+summary_df <-
+  df_cc_t1 %>%
+  dplyr::group_by(treat_cc_t1) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(cc_rep_dummy, na.rm = T),
+  `Std. Dev.` = sd(cc_rep_dummy, na.rm = T),
+  `Std. Error of Mean` = sd(cc_rep_dummy, na.rm = T)/sqrt(n()),
+  `Var` = sd(cc_rep_dummy, na.rm = T)^2 / n())
+
+summary_df %>%
+  select("treat_cc_t1","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) #%>%
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$Var[2] + summary_df$Var[1]), digits = 3)
+```
+
+
+```{r}
+summary_df_cc2 <-
+  df_cc_t2 %>%
+  dplyr::group_by(treat_cc_t2) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(cc_rep_dummy, na.rm = T),
+  `Std. Dev.` = sd(cc_rep_dummy, na.rm = T),
+  `Std. Error of Mean` = sd(cc_rep_dummy, na.rm = T)/sqrt(n()),
+  `Var` = sd(cc_rep_dummy, na.rm = T)^2 / n())
+
+summary_df_cc2 %>%
+  select("treat_cc_t2","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) #%>%
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df_cc2$Var[2] + summary_df_cc2$Var[1]), digits = 3)
+```
+
+
+
+
+DEMOCRATIC SELECTION (videos)
+```{r}
+summary_df_dem1 <-
+  df_dem_t1 %>%
+  dplyr::group_by(treat_debate_noah_t1) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(dem_feelings_1, na.rm = T),
+  `Std. Dev.` = sd(dem_feelings_1, na.rm = T),
+  `Std. Error of Mean` = sd(dem_feelings_1, na.rm = T)/sqrt(n()),
+  `Var` = sd(dem_feelings_1, na.rm = T)^2 / n())
+
+summary_df_dem1 %>%
+  select("treat_debate_noah_t1","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df_dem1$Var[2] + summary_df_dem1$Var[1]), digits = 3)
+```
+
+continuous
+```{r}
+summary_df_dem2 <-
+  df_dem_t2 %>%
+  dplyr::group_by(treat_debate_fox_t2) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(dem_feelings_1, na.rm = T),
+  `Std. Dev.` = sd(dem_feelings_1, na.rm = T),
+  `Std. Error of Mean` = sd(dem_feelings_1, na.rm = T)/sqrt(n()),
+  `Var` = sd(dem_feelings_1, na.rm = T)^2 / n())
+
+summary_df_dem2 %>%
+  select("treat_debate_fox_t2","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df_dem2$Var[2] + summary_df_dem2$Var[1]), digits = 3)
+```
+
+
+
+HEALTHCARE
+```{r}
+summary_df_health1 <-
+  df_health_t1 %>%
+  dplyr::group_by(treat_health_approve_t1) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(health_rep_dummy, na.rm = T),
+  `Std. Dev.` = sd(health_rep_dummy, na.rm = T),
+  `Std. Error of Mean` = sd(health_rep_dummy, na.rm = T)/sqrt(n()),
+  `Var` = sd(health_rep_dummy, na.rm = T)^2 / n())
+
+summary_df_health1 %>%
+  select("treat_health_approve_t1","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var")%>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df_health1$Var[2] + summary_df_health1$Var[1]), digits = 3)
+```
+
+
+```{r}
+summary_df_health2 <-
+  df_health_t2 %>%
+  dplyr::group_by(treat_health_disapprove_t2 ) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(health_rep_dummy, na.rm = T),
+  `Std. Dev.` = sd(health_rep_dummy, na.rm = T),
+  `Std. Error of Mean` = sd(health_rep_dummy, na.rm = T)/sqrt(n()),
+  `Var` = sd(health_rep_dummy, na.rm = T)^2 / n())
+
+summary_df_health2 %>%
+  select("treat_health_disapprove_t2","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var") %>%
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  round(sqrt(summary_df_health2$Var[2] + summary_df_health2$Var[1]), digits = 3)
+
+```
+
+
+
+IMPEACHMENT
+```{r}
+summary_df_impeach1 <-
+  df_impeach_t1 %>%
+  dplyr::group_by(treat_impeach_approve_t1) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(impeach_response1, na.rm = T),
+  `Std. Dev.` = sd(impeach_response1, na.rm = T),
+  `Std. Error of Mean` = sd(impeach_response1, na.rm = T)/sqrt(n()),
+  `Var` = sd(impeach_response1, na.rm = T)^2 / n())
+
+summary_df_impeach1 %>%
+  select("treat_impeach_approve_t1","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var")%>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df_impeach1$Var[2] + summary_df_impeach1$Var[1]), digits = 3)
+
+```
+
+```{r}
+summary_df_impeach2 <-
+  df_impeach_t2 %>%
+  dplyr::group_by(treat_impeach_demapprove_t) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(impeach_response1, na.rm = T),
+  `Std. Dev.` = sd(impeach_response1, na.rm = T),
+  `Std. Error of Mean` = sd(impeach_response1, na.rm = T)/sqrt(n()),
+  `Var` = sd(impeach_response1, na.rm = T)^2 / n())
+
+summary_df_impeach2 %>%
+  select("treat_impeach_demapprove_t","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df_impeach2$Var[2] + summary_df_impeach2$Var[1]), digits = 3)
+
+```
+
+
+
+
+#####################T-TESTS##############################
+
+```{r}
+impeach_t1 <- df_impeach_t1[df_impeach_t2$treat_impeach_demapprove_t==1,]
+impeach_t2 <- df_impeach_t2[df_impeach_t2$treat_impeach_demapprove_t==1,]
+impeach_control <- df_impeach_t2[df_impeach_t2$treat_impeach_demapprove_t==0,]
+
+t.test(impeach_t2$impeach_response1, impeach_control$impeach_response1)
+```
+
+
+```{r}
+cc_t1 <- df_cc_t1[df_cc_t1$treat_cc_t1==1,]
+cc_t2 <- df_cc_t2[df_cc_t2$treat_cc_t2==1,]
+cc_control <- df_cc_t2[df_cc_t2$treat_cc_t2==0,]
+
+#t.test(cc_t1$cc_rep_dummy, cc_control$cc_rep_dummy)
+t.test(cc_t2$cc_rep_dummy, cc_control$cc_rep_dummy)
+```
+
+
+```{r}
+health_t1 <- df_health_t1[df_health_t1$treat_health_approve_t1==1,]
+health_t2 <- df_health_t2[df_health_t2$treat_health_disapprove_t2==1,]
+health_control <- df_health_t2[df_health_t2$treat_health_disapprove_t2==0,]
+
+#t.test(health_t1$health_rep_dummy, health_control$health_rep_dummy)
+t.test(health_t2$health_rep_dummy, health_control$health_rep_dummy)
+```
+
+
+```{r}
+dem_t1 <- df_dem_t1[df_dem_t1$treat_debate_noah_t1==1,]
+dem_t2 <- df_dem_t2[df_dem_t2$treat_debate_fox_t2 ==1,]
+dem_control <- df_dem_t2[df_dem_t2$treat_debate_fox_t2 ==0,]
+
+t.test(dem_t1$dem_feelings_1, dem_control$dem_feelings_1)
+t.test(dem_t2$dem_feelings_1, dem_control$dem_feelings_1)
+```
+
+```{r}
+t.test(dem_t1$impeach_response1, dem_control$impeach_response1)
+t.test(dem_t2$impeach_response1, dem_control$impeach_response1)
+```
+
+
+
+
+
+## Outcome Varialbles
+How does response change based on the treatment the individual received?
+
+Healthcare - Treatment 1 ATE (df$health_response)
+```{r}
+mean(df_health_t1$health_rep_dummy[df_health_t1$treat_health_approve_t1==1], na.rm=TRUE) #mean level of support among treated 1 group
+mean(df_health_t1$health_rep_dummy[df_health_t1$treat_health_approve_t1==0], na.rm=TRUE) #mean level of support among control group
+
+# difference-in-means to estimate ATE
+mean(df_health_t1$health_rep_dummy[df_health_t1$treat_health_approve_t1==1], na.rm=TRUE) - mean(df_health_t1$health_rep_dummy[df_health_t1$treat_health_approve_t1==0], na.rm=TRUE) 
+```
+
+
+Healthcare - Treatment 2 ATE (df_health_t2$health_response)
+```{r}
+mean(df_health_t2$health_rep_dummy[df_health_t2$treat_health_disapprove_t2==1], na.rm=TRUE) #mean level of support among treated 2 group
+mean(df_health_t2$health_rep_dummy[df_health_t2$treat_health_disapprove_t2==0], na.rm=TRUE) #mean level of support among control group
+
+# difference-in-means to estimate ATE
+mean(df_health_t2$health_rep_dummy[df_health_t2$treat_health_disapprove_t2==1], na.rm=TRUE) - mean(df_health_t2$health_rep_dummy[df_health_t2$treat_health_disapprove_t2==0], na.rm=TRUE) 
+```
+
+
+
+Climate Change - Treatment 1
+```{r}
+mean(df_cc_t1$cc_rep_dummy[df_cc_t1$treat_cc_t1 ==1], na.rm=TRUE) #mean level of support among treated 1 group
+mean(df_cc_t1$cc_rep_dummy[df_cc_t1$treat_cc_t1 ==0], na.rm=TRUE) #mean level of support among control group
+
+# difference-in-means to estimate ATE
+mean(df_cc_t1$cc_rep_dummy[df_cc_t1$treat_cc_t1 ==1], na.rm=TRUE) - mean(df_cc_t1$cc_rep_dummy[df_cc_t1$treat_cc_t1 ==0], na.rm=TRUE) 
+```
+
+
+Climate Change - Treatment 2
+```{r}
+mean(df_cc_t2$cc_rep_dummy[df_cc_t2$treat_cc_t2==1], na.rm=TRUE) #mean level of support among treated 2 group
+mean(df_cc_t2$cc_rep_dummy[df_cc_t2$treat_cc_t2==0], na.rm=TRUE) #mean level of support among control group
+
+# difference-in-means to estimate ATE
+mean(df_cc_t2$cc_rep_dummy[df_cc_t2$treat_cc_t2==1], na.rm=TRUE) - mean(df_cc_t2$cc_rep_dummy[df_cc_t2$treat_cc_t2==0], na.rm=TRUE)
+```
+
+
+
+Impeachment - Treatment 1
+```{r}
+mean(df_impeach_t1$impeach_response1[df_impeach_t1$treat_impeach_approve_t1  ==1], na.rm=TRUE) #mean level of support among treated 1 group
+mean(df_impeach_t1$impeach_response1[df_impeach_t1$treat_impeach_approve_t1  ==0], na.rm=TRUE) #mean level of support among control group
+
+# difference-in-means to estimate ATE
+mean(df_impeach_t1$impeach_response1[df$treat_impeach_approve_t1  ==1], na.rm=TRUE) - mean(df_impeach_t1$impeach_response1[df$treat_impeach_approve_t1  ==0], na.rm=TRUE) 
+```
+
+
+Impeachment - Treatment 2
+```{r}
+mean(df_impeach_t2$impeach_response1[df_impeach_t2$treat_impeach_demapprove_t ==1], na.rm=TRUE) #mean level of support among treated 2 group
+mean(df_impeach_t2$impeach_response1[df_impeach_t2$treat_impeach_demapprove_t ==0], na.rm=TRUE) #mean level of support among control group
+
+# difference-in-means to estimate ATE
+mean(df_impeach_t2$impeach_response1[df_impeach_t2$treat_impeach_demapprove_t ==1], na.rm=TRUE) - mean(df_impeach_t2$impeach_response1[df_impeach_t2$treat_impeach_demapprove_t ==0], na.rm=TRUE) 
+```
+
+
+Dem Selection - Treatment 1
+```{r}
+mean(df_dem_t1$dem_feelings_1[df_dem_t1$treat_debate_noah_t1  ==1], na.rm=TRUE) #mean level of support among treated 2 group
+mean(df_dem_t1$dem_feelings_1[df_dem_t1$treat_debate_noah_t1  ==0], na.rm=TRUE) #mean level of support among control group
+
+# difference-in-means to estimate ATE
+mean(df_dem_t1$dem_feelings_1[df_dem_t1$treat_debate_noah_t1  ==1], na.rm=TRUE) - mean(df_dem_t1$dem_feelings_1[df_dem_t1$treat_debate_noah_t1  ==0], na.rm=TRUE)
+```
+
+
+
+Dem Selection - Treatment 2
+```{r}
+mean(df_dem_t2$dem_feelings_1[df_dem_t2$treat_debate_fox_t2 ==1], na.rm=TRUE) #mean level of support among treated 2 group
+mean(df_dem_t2$dem_feelings_1[df_dem_t2$treat_debate_fox_t2 ==0], na.rm=TRUE) #mean level of support among control group
+
+# difference-in-means to estimate ATE
+mean(df_dem_t2$dem_feelings_1[df_dem_t2$treat_debate_fox_t2 ==1], na.rm=TRUE) - mean(df_dem_t2$dem_feelings_1[df_dem_t2$treat_debate_fox_t2 ==0], na.rm=TRUE) 
+```
+
+
+
+
+# SUBGROUP ANALYSIS
+```{r}
+sum(df$poli_know_none, na.rm = T) #none
+sum(df$poli_know1, na.rm = T) #none or 1
+sum(df$poli_know1only, na.rm = T) #one only
+sum(df$poli_know2only, na.rm = T) #two only
+sum(df$poli_know2, na.rm = T) #two or three
+sum(df$poli_know3, na.rm = T) #three only
+```
+
+
+
+Subsetting by Political Awareness
+
+
+One or none answered correctly
+```{r}
+#Climate Change
+df_poli_know1_cc_t1 <-
+  df_cc_t1 %>% dplyr::filter(poli_know1 == 1)
+df_poli_know1_cc_t2 <-
+  df_cc_t2 %>% dplyr::filter(poli_know1 == 1)
+
+#Democratic Selection
+df_poli_know1_dem_t1 <-
+  df_dem_t1 %>% dplyr::filter(poli_know1 == 1)
+df_poli_know1_dem_t2 <-
+  df_dem_t2 %>% dplyr::filter(poli_know1 == 1)
+
+#Health Care
+df_poli_know1_health_t1 <-
+  df_health_t1 %>% dplyr::filter(poli_know1 == 1)
+df_poli_know1_health_t2 <-
+  df_health_t2 %>% dplyr::filter(poli_know1 == 1)
+
+#Impeachment
+df_poli_know1_impeach_t1 <-
+  df_impeach_t1 %>% dplyr::filter(poli_know1 == 1)
+df_poli_know1_impeach_t2 <-
+  df_impeach_t2 %>% dplyr::filter(poli_know1 == 1)
+
+
+print('climate change')
+mean(df_poli_know1_cc_t1$cc_rep_dummy[df_poli_know1_cc_t1$treat_cc_t1 ==1], na.rm=TRUE) - mean(df_poli_know1_cc_t1$cc_rep_dummy[df_poli_know1_cc_t1$treat_cc_t1 ==0], na.rm=TRUE) 
+
+mean(df_poli_know1_cc_t2$cc_rep_dummy[df_poli_know1_cc_t2$treat_cc_t2 ==1], na.rm=TRUE) - mean(df_poli_know1_cc_t2$cc_rep_dummy[df_poli_know1_cc_t2$treat_cc_t2 ==0], na.rm=TRUE) 
+
+print('dem selection')
+
+mean(df_poli_know1_dem_t1$dem_feelings_1[df_poli_know1_dem_t1$treat_debate_noah_t1  ==1], na.rm=TRUE) - mean(df_poli_know1_dem_t1$dem_feelings_1[df_poli_know1_dem_t1$treat_debate_noah_t1  ==0], na.rm=TRUE) 
+
+mean(df_poli_know1_dem_t2$dem_feelings_1[df_poli_know1_dem_t2$treat_debate_fox_t2  ==1], na.rm=TRUE) - mean(df_poli_know1_dem_t2$dem_feelings_1[df_poli_know1_dem_t2$treat_debate_fox_t2  ==0], na.rm=TRUE)
+
+print('health care')
+
+mean(df_poli_know1_health_t1$health_rep_dummy[df_poli_know1_health_t1$treat_health_approve_t1  ==1], na.rm=TRUE) - mean(df_poli_know1_health_t1$health_rep_dummy[df_poli_know1_health_t1$treat_health_approve_t1  ==0], na.rm=TRUE) 
+
+mean(df_poli_know1_health_t2$health_rep_dummy[df_poli_know1_health_t2$treat_health_disapprove_t2   ==1], na.rm=TRUE) - mean(df_poli_know1_health_t2$health_rep_dummy[df_poli_know1_health_t2$treat_health_disapprove_t2   ==0], na.rm=TRUE)
+
+print('impeachment')
+ 
+mean(df_poli_know1_impeach_t1$impeach_response1[df_poli_know1_impeach_t1$treat_impeach_approve_t1  ==1], na.rm=TRUE) - mean(df_poli_know1_impeach_t1$impeach_response1[df_poli_know1_impeach_t1$treat_impeach_approve_t1  ==0], na.rm=TRUE) 
+
+mean(df_poli_know1_impeach_t2$impeach_response1[df_poli_know1_impeach_t2$treat_impeach_demapprove_t   ==1], na.rm=TRUE) - mean(df_poli_know1_impeach_t2$impeach_response1[df_poli_know1_impeach_t2$treat_impeach_demapprove_t   ==0], na.rm=TRUE) 
+```
+
+
+```{r}
+repub_poliknow1_impeach_df <- df_poli_know1_impeach_t1 %>%
+  filter(party==1)
+
+repub_poliknow1_impeach_df <- df_poli_know1_impeach_t2 %>%
+  filter(party==1)
+
+
+dem_poliknow1_impeach_df1 <- df_poli_know1_impeach_t1 %>%
+  filter(party==3)
+
+dem_poliknow1_impeach_df2 <- df_poli_know1_impeach_t2 %>%
+  filter(party==3)
+
+mean(dem_poliknow1_impeach_df1$impeach_response1[dem_poliknow1_impeach_df1$treat_impeach_approve_t1   ==1], na.rm=TRUE) - mean(dem_poliknow1_impeach_df1$impeach_response1[dem_poliknow1_impeach_df1$treat_impeach_approve_t1   ==0], na.rm=TRUE) 
+
+#no low awareness Democrats in treat_impeach_demapprove_t treatment group
+
+sum(dem_poliknow1_impeach_df1$treat_impeach_demapprove_t   ==1, na.rm=T)
+```
+
+```{r}
+count_fun <- function(x) {
+  return(nrow(x))
+}
+
+ideo.split <- split(df, df$ideology)
+ideology_count <- sapply(ideo.split, count_fun)
+ideology_count <- data.frame(ideology_count)[,1]
+ideology_pct <- round(ideology_count / 97,3)
+ideology_name <- c("Somewhat conservative", "Moderate", "Liberal", "Very liberal")
+
+ideology_count <- data.frame(ideology_name, ideology_count, ideology_pct)
+
+  #manually order ideology_name
+ideology_count$ideology_name <- factor(ideology_count$ideology_name,                                    
+                  levels = c("Somewhat conservative", "Moderate", "Liberal", "Very liberal"))
+
+
+ggplot(ideology_count, aes(x = ideology_name, y = ideology_count, label = scales::percent(ideology_pct))) +
+  geom_bar(position = position_dodge(width = 1), width=0.6, stat = "identity",
+           col="black") + 
+  geom_text(position = position_dodge(width = .9),    # move to center of bars
+            vjust = -0.7,    # nudge above top of bar
+            size = 3.5) + 
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ylab("Percentage of Participants") +
+  xlab("Ideology") + 
+  theme_hc()+ scale_colour_hc() +
+  #theme(plot.margin = unit(c(.2, 3.5, 0, 3.5), "cm")) +
+  ggtitle("Ideology Distribtuion of Participants")
+
+```
+
+
+
+```{r}
+ggplot(df, aes(ideology)) + geom_bar(col="black") +
+  theme_hc()+ scale_colour_hc() +
+  xlab("Number of Questions Answered Correctly") +
+  scale_x_discrete("Ideology", breaks=c("2","3","4","5"), 
+  labels=c("2" = "Somewhat conservative", "3" = "Moderate", "4" = "Liberal", "5"="Very liberal"), limits=c("1", "2", "3", "4", "5")) +
+  ylab("Count") +
+  ggtitle("Ideology Distribtuion of Participants")
+
+```
+
+
+
+
+Two or three answered correctly (high)
+```{r}
+#Climate Change
+df_poli_know2_cc_t1 <-
+  df_cc_t1 %>% dplyr::filter(poli_know2 == 1)
+df_poli_know2_cc_t2 <-
+  df_cc_t2 %>% dplyr::filter(poli_know2 == 1)
+
+#Democratic Selection
+df_poli_know2_dem_t1 <-
+  df_dem_t1 %>% dplyr::filter(poli_know2 == 1)
+df_poli_know2_dem_t2 <-
+  df_dem_t2 %>% dplyr::filter(poli_know2 == 1)
+
+#Health Care
+df_poli_know2_health_t1 <-
+  df_health_t1 %>% dplyr::filter(poli_know2 == 1)
+df_poli_know2_health_t2 <-
+  df_health_t2 %>% dplyr::filter(poli_know2 == 1)
+
+#Impeachment
+df_poli_know2_impeach_t1 <-
+  df_impeach_t1 %>% dplyr::filter(poli_know2 == 1)
+df_poli_know2_impeach_t2 <-
+  df_impeach_t2 %>% dplyr::filter(poli_know2 == 1)
+
+
+print('climate change')
+mean(df_poli_know2_cc_t1$cc_rep_dummy[df_poli_know2_cc_t1$treat_cc_t1 ==1], na.rm=TRUE) - mean(df_poli_know2_cc_t1$cc_rep_dummy[df_poli_know2_cc_t1$treat_cc_t1 ==0], na.rm=TRUE) 
+
+mean(df_poli_know2_cc_t2$cc_rep_dummy[df_poli_know2_cc_t2$treat_cc_t2 ==1], na.rm=TRUE) - mean(df_poli_know2_cc_t2$cc_rep_dummy[df_poli_know2_cc_t2$treat_cc_t2 ==0], na.rm=TRUE) 
+
+print('dem selection')
+
+mean(df_poli_know2_dem_t1$dem_feelings_1[df_poli_know2_dem_t1$treat_debate_noah_t1  ==1], na.rm=TRUE) - mean(df_poli_know2_dem_t1$dem_feelings_1[df_poli_know2_dem_t1$treat_debate_noah_t1  ==0], na.rm=TRUE) 
+
+mean(df_poli_know2_dem_t2$dem_feelings_1[df_poli_know2_dem_t2$treat_debate_fox_t2  ==1], na.rm=TRUE) - mean(df_poli_know2_dem_t2$dem_feelings_1[df_poli_know2_dem_t2$treat_debate_fox_t2  ==0], na.rm=TRUE)
+
+print('health care')
+
+mean(df_poli_know2_health_t1$health_rep_dummy[df_poli_know2_health_t1$treat_health_approve_t1  ==1], na.rm=TRUE) - mean(df_poli_know2_health_t1$health_rep_dummy[df_poli_know2_health_t1$treat_health_approve_t1  ==0], na.rm=TRUE) 
+
+mean(df_poli_know2_health_t2$health_rep_dummy[df_poli_know2_health_t2$treat_health_disapprove_t2   ==1], na.rm=TRUE) - mean(df_poli_know2_health_t2$health_rep_dummy[df_poli_know2_health_t2$treat_health_disapprove_t2   ==0], na.rm=TRUE)
+
+print('impeachment')
+ 
+mean(df_poli_know2_impeach_t1$impeach_response1[df_poli_know2_impeach_t1$treat_impeach_approve_t1  ==1], na.rm=TRUE) - mean(df_poli_know2_impeach_t1$impeach_response1[df_poli_know2_impeach_t1$treat_impeach_approve_t1  ==0], na.rm=TRUE) 
+
+mean(df_poli_know2_impeach_t2$impeach_response1[df_poli_know2_impeach_t2$treat_impeach_demapprove_t   ==1], na.rm=TRUE) - mean(df_poli_know2_impeach_t2$impeach_response1[df_poli_know2_impeach_t2$treat_impeach_demapprove_t   ==0], na.rm=TRUE) 
+```
+
+
+
+
+
+Tables - by political awareness
+```{r}
+summary_df <-
+  df_poli_know2_cc_t1 %>%
+  dplyr::group_by(treat_cc_t1) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(cc_rep_dummy, na.rm = T),
+  `Std. Dev.` = sd(cc_rep_dummy, na.rm = T),
+  `Std. Error of Mean` = sd(cc_rep_dummy, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(cc_rep_dummy, na.rm = T)^2 / n(),
+  `variance` = var(cc_rep_dummy, na.rm = T)/n() )
+
+  summary_df %>%
+    select("treat_cc_t1","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n", "variance") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+
+```{r}
+summary_df <-
+  df_poli_know2_cc_t2 %>%
+  dplyr::group_by(treat_cc_t2) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(cc_rep_dummy, na.rm = T),
+  `Std. Dev.` = sd(cc_rep_dummy, na.rm = T),
+  `Std. Error of Mean` = sd(cc_rep_dummy, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(cc_rep_dummy, na.rm = T)^2 / n(),
+  `variance` = var(cc_rep_dummy, na.rm = T)/n() )
+
+  summary_df %>%
+    select("treat_cc_t2","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n", "variance") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+```{r}
+summary_df <-
+  df_poli_know2_dem_t1 %>%
+  dplyr::group_by(treat_debate_noah_t1) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(dem_feelings_1, na.rm = T),
+  `Std. Dev.` = sd(dem_feelings_1, na.rm = T),
+  `Std. Error of Mean` = sd(dem_feelings_1, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(dem_feelings_1, na.rm = T)^2 / n(),
+  `variance` = var(dem_feelings_1, na.rm = T)/n() )
+
+  summary_df %>%
+    select("treat_debate_noah_t1","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n", "variance") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+```{r}
+summary_df <-
+  df_poli_know2_dem_t2 %>%
+  dplyr::group_by(treat_debate_fox_t2) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(dem_feelings_1, na.rm = T),
+  `Std. Dev.` = sd(dem_feelings_1, na.rm = T),
+  `Std. Error of Mean` = sd(dem_feelings_1, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(dem_feelings_1, na.rm = T)^2 / n(),
+  `variance` = var(dem_feelings_1, na.rm = T)/n() )
+
+  summary_df %>%
+    select("treat_debate_fox_t2","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n", "variance") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+
+```{r}
+summary_df <-
+  df_poli_know2_health_t1 %>%
+  dplyr::group_by(treat_health_approve_t1) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(health_rep_dummy, na.rm = T),
+  `Std. Dev.` = sd(health_rep_dummy, na.rm = T),
+  `Std. Error of Mean` = sd(health_rep_dummy, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(health_rep_dummy, na.rm = T)^2 / n(),
+  `variance` = var(health_rep_dummy, na.rm = T)/n() )
+
+  summary_df %>%
+    select("treat_health_approve_t1","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n", "variance") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+
+```{r}
+summary_df <-
+  df_poli_know2_health_t2 %>%
+  dplyr::group_by(treat_health_disapprove_t2) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(health_rep_dummy, na.rm = T),
+  `Std. Dev.` = sd(health_rep_dummy, na.rm = T),
+  `Std. Error of Mean` = sd(health_rep_dummy, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(health_rep_dummy, na.rm = T)^2 / n(),
+  `variance` = var(health_rep_dummy, na.rm = T)/n() )
+
+  summary_df %>%
+    select("treat_health_disapprove_t2","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n", "variance") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+```{r}
+summary_df <-
+  df_poli_know1_impeach_t1 %>%
+  dplyr::group_by(treat_impeach_approve_t1) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(impeach_response1, na.rm = T),
+  `Std. Dev.` = sd(impeach_response1, na.rm = T),
+  `Std. Error of Mean` = sd(impeach_response1, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(impeach_response1, na.rm = T)^2 / n(),
+  `variance` = var(impeach_response1, na.rm = T)/n() )
+
+  summary_df %>%
+    select("treat_impeach_approve_t1","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n", "variance") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+```{r}
+summary_df <-
+  df_poli_know1_impeach_t2 %>%
+  # group (split) it by treatment to be able to calculate
+  # mean, standatd deviation standard error of the mean and number of observations
+  # for treatment and control
+  dplyr::group_by(treat_impeach_demapprove_t) %>%
+  # summarise function to show N, mean, standard deviation and standard error of mean
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(impeach_response1, na.rm = T),
+  `Std. Dev.` = sd(impeach_response1, na.rm = T),
+  `Std. Error of Mean` = sd(impeach_response1, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(impeach_response1, na.rm = T)^2 / n(),
+  `variance` = var(impeach_response1, na.rm = T)/n() )
+
+  summary_df %>%
+    select("treat_impeach_demapprove_t","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n", "variance") %>%
+    
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+
+
+
+
+# Plots
+
+
+```{r}
+vec_cc_t1 <- (df_poli_know2_cc_t1[df_poli_know2_cc_t1$treat_cc_t1 == 1, ])$cc_rep_dummy
+vec_cc_control <- (df_poli_know2_cc_t2[df_poli_know2_cc_t2$treat_cc_t2 == 0, ])$cc_rep_dummy
+vec_cc_t2 <- (df_poli_know2_cc_t2[df_poli_know2_cc_t2$treat_cc_t2 == 1, ])$cc_rep_dummy
+
+cc_rep <- c(vec_cc_t1, vec_cc_control, vec_cc_t2)
+
+
+  #character vector
+vec_cc_t1_n <- rep("vec_cc_t1", length(vec_cc_t1))
+vec_cc_t2_n <- rep("vec_cc_t2", length(vec_cc_t2))
+vec_cc_control_n <- rep("vec_cc_control", length(vec_cc_control))
+
+cc_name <- c(vec_cc_t1_n, vec_cc_control_n, vec_cc_t2_n)
+
+
+
+#df_ggplot <- data.frame(vl_impeach_control, vl_impeach_t1, vl_impeach_t2)
+df_ggplot <- data.frame(cc_name, cc_rep)
+```
+
+```{r}
+ggplot(df_ggplot, aes(x=cc_name, y=cc_rep)) + 
+  geom_jitter(width = 0.08, alpha = 0.85, color = "tomato",size = 3) + 
+  ggplot2::stat_summary(fun.data = "mean_cl_normal", 
+                        geom="crossbar", colour = "black", width = 0.3, aes(group = cc_name)) +
+  ggtitle("Renewable Energy Goal Opinion Among High Politically Aware") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5)) +
+  theme(axis.title = element_text()) + 
+      xlab("Treatment Group") +
+      ylab("Percentage Agree") +
+  scale_x_discrete("Treatment Group", labels = c("vec_cc_t1"="Treated 1" ,"vec_cc_t2"="Treated 2",
+  "vec_cc_control"="Control")) +
+  scale_y_continuous("Response", breaks=seq(0,1, 1),labels = c("Unrealistic", "Realistic")) +
+  theme(plot.title = element_text(hjust = .5)) +
+  ylab("Impeach and Remove") +
+  theme(plot.margin = unit(c(1, 5, .2, 2), "cm")) 
+  
+```
+
+
+
+
+
+
+```{r}
+vec_cc_t1 <- (df_poli_know1_cc_t1[df_poli_know1_cc_t1$treat_cc_t1 == 1, ])$cc_rep_dummy
+vec_cc_control <- (df_poli_know1_cc_t2[df_poli_know1_cc_t2$treat_cc_t2 == 0, ])$cc_rep_dummy
+vec_cc_t2 <- (df_poli_know1_cc_t2[df_poli_know1_cc_t2$treat_cc_t2 == 1, ])$cc_rep_dummy
+
+cc_rep <- c(vec_cc_t1, vec_cc_control, vec_cc_t2)
+
+
+  #character vector
+vec_cc_t1_n <- rep("vec_cc_t1", length(vec_cc_t1))
+vec_cc_t2_n <- rep("vec_cc_t2", length(vec_cc_t2))
+vec_cc_control_n <- rep("vec_cc_control", length(vec_cc_control))
+
+cc_name <- c(vec_cc_t1_n, vec_cc_control_n, vec_cc_t2_n)
+
+
+df_ggplot <- data.frame(cc_name, cc_rep)
+```
+
+
+```{r}
+ggplot(df_ggplot, aes(x=cc_name, y=cc_rep)) + 
+  geom_jitter(width = 0.08, alpha = 0.85, color = "tomato",size = 3) + 
+  ggplot2::stat_summary(fun.data = "mean_cl_normal", 
+                        geom="crossbar", colour = "black", width = 0.3, aes(group = cc_name)) +
+  ggtitle("Renewable Energy Goal Opinion Among Low Politically Aware") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5)) +
+  theme(axis.title = element_text()) + 
+      xlab("Treatment Group") +
+      ylab("Percentage Agree") +
+  scale_x_discrete("Treatment Group", labels = c("vec_cc_t1"="Treated 1" ,"vec_cc_t2"="Treated 2",
+  "vec_cc_control"="Control")) +
+  scale_y_continuous("Response", breaks=seq(0,1, 1),labels = c("Unrealistic","Realistic")) +
+  theme(plot.title = element_text(hjust = .5)) +
+  ylab("Impeach and Remove") +
+  theme(plot.margin = unit(c(1, 5, .2, 2), "cm")) 
+  
+```
+
+
+
+
+```{r}
+vec_impeach_t1 <- (df_poli_know2_impeach_t1[df_poli_know2_impeach_t1$treat_impeach_approve_t1 == 1, ])$impeach_response1
+vec_impeach_control <- (df_poli_know2_impeach_t2[df_poli_know2_impeach_t2$treat_impeach_demapprove_t == 0, ])$impeach_response1
+vec_impeach_t2 <- (df_poli_know2_impeach_t2[df_poli_know2_impeach_t2$treat_impeach_demapprove_t  == 1, ])$impeach_response1
+
+impeach_rep <- c(vec_impeach_t1, vec_impeach_control, vec_impeach_t2)
+
+
+  #character vector
+vec_impeach_t1_n <- rep("vec_impeach_t1", length(vec_impeach_t1))
+vec_impeach_control_n <- rep("vec_impeach_control", length(vec_impeach_control))
+vec_impeach_t2_n <- rep("vec_impeach_t2", length(vec_impeach_t2))
+
+impeach_name <- c(vec_impeach_t1_n, vec_impeach_control_n, vec_impeach_t2_n)
+
+
+
+#df_ggplot <- data.frame(vl_impeach_control, vl_impeach_t1, vl_impeach_t2)
+df_ggplot <- data.frame(impeach_name, impeach_rep)
+```
+
+
+```{r}
+ggplot(df_ggplot, aes(x=impeach_name, y=impeach_rep)) + 
+  geom_jitter(width = 0.08, alpha = 0.85, color = "tomato",size = 3) + 
+  ggplot2::stat_summary(fun.data = "mean_cl_normal", 
+                        geom="crossbar", colour = "black", width = 0.3, aes(group = impeach_name)) +
+  ggtitle("Impeachment Opinion Among High Politically Aware") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5)) +
+  theme(axis.title = element_text()) + 
+      xlab("Treatment Group") +
+      ylab("Percentage Agree") +
+  scale_x_discrete("Treatment Group", labels = c("vec_impeach_t1"="Treated 1" ,"vec_impeach_t2"="Treated 2",
+  "vec_impeach_control"="Control")) +
+  scale_y_continuous("Response", breaks=seq(0,1, 1),labels = c("Other","Impeach and Remove")) +
+  theme(axis.text.y = element_text(angle = 90, hjust = .5)) +
+  #theme(plot.title = element_text(hjust = .5)) +
+  #ylab("Impeach and Remove") +
+  theme(plot.margin = unit(c(1, 5, .2, 2), "cm")) 
+  
+```
+
+
+
+
+
+```{r}
+vec_impeach_t1 <- (df_poli_know1_impeach_t1[df_poli_know1_impeach_t1$treat_impeach_approve_t1 == 1, ])$impeach_response1
+vec_impeach_control <- (df_poli_know1_impeach_t2[df_poli_know1_impeach_t2$treat_impeach_demapprove_t == 0, ])$impeach_response1
+vec_impeach_t2 <- (df_poli_know1_impeach_t2[df_poli_know1_impeach_t2$treat_impeach_demapprove_t  == 1, ])$impeach_response1
+
+impeach_rep <- c(vec_impeach_t1, vec_impeach_control, vec_impeach_t2)
+
+
+  #character vector
+vec_impeach_t1_n <- rep("vec_impeach_t1", length(vec_impeach_t1))
+vec_impeach_control_n <- rep("vec_impeach_control", length(vec_impeach_control))
+vec_impeach_t2_n <- rep("vec_impeach_t2", length(vec_impeach_t2))
+
+impeach_name <- c(vec_impeach_t1_n, vec_impeach_control_n, vec_impeach_t2_n)
+
+
+
+#df_ggplot <- data.frame(vl_impeach_control, vl_impeach_t1, vl_impeach_t2)
+df_ggplot <- data.frame(impeach_name, impeach_rep)
+```
+
+
+```{r}
+ggplot(df_ggplot, aes(x=impeach_name, y=impeach_rep)) + 
+  geom_jitter(width = 0.08, alpha = 0.85, color = "tomato",size = 3) + 
+  ggplot2::stat_summary(fun.data = "mean_cl_normal", 
+                        geom="crossbar", colour = "black", width = 0.3, aes(group = impeach_name)) +
+  ggtitle("Impeachment Opinion Among Low Politically Aware") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5)) +
+  theme(axis.title = element_text()) + 
+      xlab("Treatment Group") +
+      ylab("Percentage Agree") +
+  scale_x_discrete("Treatment Group", labels = c("vec_impeach_t1"="Treated 1" ,"vec_impeach_t2"="Treated 2",
+  "vec_impeach_control"="Control")) +
+  scale_y_continuous("Response", breaks=seq(0,1, 1),labels = c("Other","Impeach and Remove")) +
+  theme(axis.text.y = element_text(angle = 90, hjust = .5)) +
+  #theme(plot.title = element_text(hjust = .5)) +
+  #ylab("Impeach and Remove") +
+  theme(plot.margin = unit(c(1, 5, .2, 2), "cm")) 
+  
+```
+
+
+
+
+
+
+
+
+```{r}
+vec_health_t1 <- (df_poli_know2_health_t1[df_poli_know2_health_t1$treat_health_approve_t1 == 1, ])$health_rep_dummy
+vec_health_control <- (df_poli_know2_health_t2[df_poli_know2_health_t2$treat_health_disapprove_t2 == 0, ])$health_rep_dummy
+vec_health_t2 <- (df_poli_know2_health_t2[df_poli_know2_health_t2$treat_health_disapprove_t2 == 1, ])$health_rep_dummy
+
+health_rep <- c(vec_health_t1, vec_health_control, vec_health_t2)
+
+
+  #character vector
+vec_health_t1_n <- rep("vec_health_t1", length(vec_health_t1))
+vec_health_t2_n <- rep("vec_health_t2", length(vec_health_t2))
+vec_health_control_n <- rep("vec_health_control", length(vec_health_control))
+
+health_name <- c(vec_health_t1_n, vec_health_control_n, vec_health_t2_n)
+
+
+df_ggplot <- data.frame(health_name, health_rep)
+```
+
+
+```{r}
+hk_health <- ggplot(df_ggplot, aes(x=health_name, y=health_rep)) + 
+  geom_jitter(width = 0.08, alpha = 0.85, color = "tomato",size = 3) + 
+  ggplot2::stat_summary(fun.data = "mean_cl_normal", 
+                        geom="crossbar", colour = "black", width = 0.3, aes(group = health_name)) +
+  ggtitle("ACA Opinion Among High Politically Aware") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5)) +
+  theme(axis.title = element_text()) + 
+      xlab("Treatment Group") +
+      ylab("Percentage Agree") +
+  scale_x_discrete("Treatment Group", labels = c("vec_health_t1"="Treated 1" ,"vec_health_t2"="Treated 2",
+  "vec_health_control"="Control")) +
+  scale_y_continuous("Response", breaks=seq(0,1, 1),labels = c("Disapprove","Approve")) +
+  theme(plot.title = element_text(hjust = .5)) +
+  ylab("Impeach and Remove") +
+  theme(plot.margin = unit(c(1, 5, .2, 2), "cm")) 
+  
+```
+
+
+
+
+
+
+
+```{r}
+vec_health_t1 <- (df_poli_know1_health_t1[df_poli_know1_health_t1$treat_health_approve_t1== 1, ])$health_rep_dummy
+vec_health_control <- (df_poli_know1_health_t2[df_poli_know1_health_t2$treat_health_disapprove_t2 == 0, ])$health_rep_dummy
+vec_health_t2 <- (df_poli_know1_health_t2[df_poli_know1_health_t2$treat_health_disapprove_t2 == 1, ])$health_rep_dummy
+
+health_rep <- c(vec_health_t1, vec_health_control, vec_health_t2)
+
+
+  #character vector
+vec_health_t1_n <- rep("vec_health_t1", length(vec_health_t1))
+vec_health_t2_n <- rep("vec_health_t2", length(vec_health_t2))
+vec_health_control_n <- rep("vec_health_control", length(vec_health_control))
+
+health_name <- c(vec_health_t1_n, vec_health_control_n, vec_health_t2_n)
+
+
+df_ggplot <- data.frame(health_name, health_rep)
+```
+
+
+```{r}
+lk_health <- ggplot(df_ggplot, aes(x=health_name, y=health_rep)) + 
+  geom_jitter(width = 0.08, alpha = 0.85, color = "tomato",size = 3) + 
+  ggplot2::stat_summary(fun.data = "mean_cl_normal", 
+                        geom="crossbar", colour = "black", width = 0.3, aes(group = health_name)) +
+  ggtitle("ACA Opinion Among Low Politically Aware") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5)) +
+  theme(axis.title = element_text()) + 
+      xlab("Treatment Group") +
+      ylab("Percentage Agree") +
+  scale_x_discrete("Treatment Group", labels = c("vec_health_t1"="Treated 1" ,"vec_health_t2"="Treated 2",
+  "vec_health_control"="Control")) +
+  scale_y_continuous("Response", breaks=seq(0,1, 1),labels = c("Disapprove", "Approve")) +
+  theme(plot.title = element_text(hjust = .5)) +
+  ylab("Impeach and Remove") +
+  theme(plot.margin = unit(c(1, 5, .2, 2), "cm")) 
+  
+```
+
+
+
+
+
+
+### Combined Plot
+```{r}
+vec_health_t1 <- (df_poli_know2_health_t1[df_poli_know2_health_t1$treat_health_approve_t1 == 1, ])$health_rep_dummy
+vec_health_control <- (df_poli_know2_health_t2[df_poli_know2_health_t2$treat_health_disapprove_t2 == 0, ])$health_rep_dummy
+vec_health_t2 <- (df_poli_know2_health_t2[df_poli_know2_health_t2$treat_health_disapprove_t2 == 1, ])$health_rep_dummy
+
+health_rep <- c(vec_health_t1, vec_health_control, vec_health_t2)
+
+
+  #character vector
+vec_health_t1_n <- rep("vec_health_t1", length(vec_health_t1))
+vec_health_t2_n <- rep("vec_health_t2", length(vec_health_t2))
+vec_health_control_n <- rep("vec_health_control", length(vec_health_control))
+
+health_name <- c(vec_health_t1_n, vec_health_control_n, vec_health_t2_n)
+
+
+df_ggplot <- data.frame(health_name, health_rep)
+```
+
+
+```{r}
+hk_health <- ggplot(df_ggplot, aes(x=health_name, y=health_rep)) + 
+  geom_jitter(width = 0.08, alpha = 0.85, color = "tomato",size = 3) + 
+  ggplot2::stat_summary(fun.data = "mean_cl_normal", 
+                        geom="crossbar", colour = "black", width = 0.3, aes(group = health_name)) +
+  ggtitle("High Politically Aware") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5)) +
+  theme(axis.title = element_text()) + 
+      xlab("Treatment Group") +
+      ylab("Percentage Agree") +
+  scale_x_discrete("Treatment Group", labels = c("vec_health_t1"="Treated 1" ,"vec_health_t2"="Treated 2",
+  "vec_health_control"="Control")) +
+  scale_y_continuous("Response", breaks=seq(0,1, 1),labels = c("Disapprove","Approve")) +
+  theme(axis.text.y = element_text(angle = 90, hjust = .5)) +
+  theme(plot.title = element_text(hjust = .5)) +
+  ylab("Impeach and Remove") 
+
+```
+
+
+```{r}
+vec_health_t1 <- (df_poli_know1_health_t1[df_poli_know1_health_t1$treat_health_approve_t1== 1, ])$health_rep_dummy
+vec_health_control <- (df_poli_know1_health_t2[df_poli_know1_health_t2$treat_health_disapprove_t2 == 0, ])$health_rep_dummy
+vec_health_t2 <- (df_poli_know1_health_t2[df_poli_know1_health_t2$treat_health_disapprove_t2 == 1, ])$health_rep_dummy
+
+health_rep <- c(vec_health_t1, vec_health_control, vec_health_t2)
+
+
+  #character vector
+vec_health_t1_n <- rep("vec_health_t1", length(vec_health_t1))
+vec_health_t2_n <- rep("vec_health_t2", length(vec_health_t2))
+vec_health_control_n <- rep("vec_health_control", length(vec_health_control))
+
+health_name <- c(vec_health_t1_n, vec_health_control_n, vec_health_t2_n)
+
+
+df_ggplot <- data.frame(health_name, health_rep)
+```
+
+
+```{r}
+lk_health <- ggplot(df_ggplot, aes(x=health_name, y=health_rep)) + 
+  geom_jitter(width = 0.08, alpha = 0.85, color = "tomato",size = 3) + 
+  ggplot2::stat_summary(fun.data = "mean_cl_normal", 
+                        geom="crossbar", colour = "black", width = 0.3, aes(group = health_name)) +
+  ggtitle("Low Politically Aware") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5)) +
+  theme(axis.title = element_text()) + 
+      xlab("Treatment Group") +
+      #ylab("Response") +
+  scale_x_discrete("Treatment Group", labels = c("vec_health_t1"="Treated 1" ,"vec_health_t2"="Treated 2",
+  "vec_health_control"="Control")) +
+  scale_y_continuous("Response", breaks=seq(0,1, 1),labels = c("Disapprove", "Approve")) +
+  theme(axis.text.y = element_text(angle = 90, hjust = .5)) +
+  theme(plot.title = element_text(hjust = .5)) 
+
+```
+
+
+```{r}
+library("gridExtra")
+library("ggpubr")
+combined_figure <- grid.arrange(lk_health, hk_health,
+             ncol = 2, nrow = 1)
+
+annotate_figure(combined_figure,
+                top = text_grob("ACA Opinion by Political Awareness", face="bold", size = 14))
+
+```
+
+
+
+
+
+
+
+EVERYONE (not subsetted)
+```{r}
+vec_cc_t1 <- (df_cc_t1[df_cc_t1$treat_cc_t1 == 1, ])$cc_rep_dummy
+vec_cc_control <- (df_cc_t1[df_cc_t1$treat_cc_t1 == 0, ])$cc_rep_dummy
+vec_cc_t2 <- (df_cc_t2[df_cc_t2$treat_cc_t2 == 1, ])$cc_rep_dummy
+
+cc_rep <- c(vec_cc_t1, vec_cc_control, vec_cc_t2)
+
+
+  #character vector
+vec_cc_t1_n <- rep("vec_cc_t1", length(vec_cc_t1))
+vec_cc_t2_n <- rep("vec_cc_t2", length(vec_cc_t2))
+vec_cc_control_n <- rep("vec_cc_control", length(vec_cc_control))
+
+cc_name <- c(vec_cc_t1_n, vec_cc_control_n, vec_cc_t2_n)
+
+
+
+#df_ggplot <- data.frame(vl_impeach_control, vl_impeach_t1, vl_impeach_t2)
+df_ggplot <- data.frame(cc_name, cc_rep)
+```
+
+```{r}
+ggplot(df_ggplot, aes(x=cc_name, y=cc_rep)) + 
+  geom_jitter(width = 0.08, alpha = 0.85, color = "tomato",size = 3) + 
+  ggplot2::stat_summary(fun.data = "mean_cl_normal", 
+                        geom="crossbar", colour = "black", width = 0.3, aes(group = cc_name)) +
+  ggtitle("Renewable Energy Goal Opinion") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5)) +
+  theme(axis.title = element_text()) + 
+      xlab("Treatment Group") +
+      ylab("Percentage Agree") +
+  scale_x_discrete("Treatment Group", labels = c("vec_cc_t1"="Treated 1" ,"vec_cc_t2"="Treated 2",
+  "vec_cc_control"="Control")) +
+  scale_y_continuous("Response", breaks=seq(0,1, 1),labels = c("Unrealistic","Realistic")) +
+  theme(plot.title = element_text(hjust = .5)) +
+  ylab("Impeach and Remove") +
+  theme(plot.margin = unit(c(1, 5, .2, 2), "cm")) 
+  
+```
+
+
+
+
+Agree news consumer
+```{r}
+#Climate Change
+df_news_cc_t1 <-
+  df_cc_t1 %>% dplyr::filter(news_agreemore == 1)
+df_news_cc_t2 <-
+  df_cc_t2 %>% dplyr::filter(news_agreemore == 1)
+
+#Democratic Selection
+df_news_dem_t1 <-
+  df_dem_t1 %>% dplyr::filter(news_agreemore == 1)
+df_news_dem_t2 <-
+  df_dem_t2 %>% dplyr::filter(news_agreemore == 1)
+
+#Health Care
+df_news_health_t1 <-
+  df_health_t1 %>% dplyr::filter(news_agreemore == 1)
+df_news_health_t2 <-
+  df_health_t2 %>% dplyr::filter(news_agreemore == 1)
+
+#Impeachment
+df_news_impeach_t1 <-
+  df_impeach_t1 %>% dplyr::filter(news_agreemore == 1)
+df_news_impeach_t2 <-
+  df_impeach_t2 %>% dplyr::filter(news_agreemore == 1)
+
+
+print('climate change')
+mean(df_news_cc_t1$cc_rep_dummy[df_news_cc_t1$treat_cc_t1 ==1], na.rm=TRUE) - mean(df_news_cc_t1$cc_rep_dummy[df_news_cc_t1$treat_cc_t1 ==0], na.rm=TRUE) 
+
+mean(df_news_cc_t2$cc_rep_dummy[df_news_cc_t2$treat_cc_t2 ==1], na.rm=TRUE) - mean(df_news_cc_t2$cc_rep_dummy[df_news_cc_t2$treat_cc_t2 ==0], na.rm=TRUE) 
+
+print('dem selection')
+
+mean(df_news_dem_t1$dem_feelings_1[df_news_dem_t1$treat_debate_noah_t1  ==1], na.rm=TRUE) - mean(df_news_dem_t1$dem_feelings_1[df_news_dem_t1$treat_debate_noah_t1  ==0], na.rm=TRUE) 
+
+mean(df_news_dem_t2$dem_feelings_1[df_news_dem_t2$treat_debate_fox_t2  ==1], na.rm=TRUE) - mean(df_news_dem_t2$dem_feelings_1[df_news_dem_t2$treat_debate_fox_t2  ==0], na.rm=TRUE)
+
+print('health care')
+
+mean(df_news_health_t1$health_rep_dummy[df_news_health_t1$treat_health_approve_t1  ==1], na.rm=TRUE) - mean(df_news_health_t1$health_rep_dummy[df_news_health_t1$treat_health_approve_t1  ==0], na.rm=TRUE) 
+
+mean(df_news_health_t2$health_rep_dummy[df_news_health_t2$treat_health_disapprove_t2   ==1], na.rm=TRUE) - mean(df_news_health_t2$health_rep_dummy[df_news_health_t2$treat_health_disapprove_t2   ==0], na.rm=TRUE)
+
+print('impeachment')
+ 
+mean(df_news_impeach_t1$impeach_response1[df_news_impeach_t1$treat_impeach_approve_t1  ==1], na.rm=TRUE) - mean(df_news_impeach_t1$impeach_response1[df_news_impeach_t1$treat_impeach_approve_t1  ==0], na.rm=TRUE) 
+
+mean(df_news_impeach_t2$impeach_response1[df_news_impeach_t2$treat_impeach_demapprove_t   ==1], na.rm=TRUE) - mean(df_news_impeach_t2$impeach_response1[df_news_impeach_t2$treat_impeach_demapprove_t   ==0], na.rm=TRUE) 
+```
+
+
+
+IDEOLOGY SUBGROUPS
+
+moderates
+```{r}
+#Climate Change
+df_moderate_cc_t1 <-
+  df_cc_t1 %>% dplyr::filter(moderate == 1)
+df_moderate_cc_t2 <-
+  df_cc_t2 %>% dplyr::filter(moderate == 1)
+
+#Democratic Selection
+df_moderate_dem_t1 <-
+  df_dem_t1 %>% dplyr::filter(moderate == 1)
+df_moderate_dem_t2 <-
+  df_dem_t2 %>% dplyr::filter(moderate == 1)
+
+#Health Care
+df_moderate_health_t1 <-
+  df_health_t1 %>% dplyr::filter(moderate == 1)
+df_moderate_health_t2 <-
+  df_health_t2 %>% dplyr::filter(moderate == 1)
+
+#Impeachment
+df_moderate_impeach_t1 <-
+  df_impeach_t1 %>% dplyr::filter(moderate == 1)
+df_moderate_impeach_t2 <-
+  df_impeach_t2 %>% dplyr::filter(moderate == 1)
+
+
+print('climate change')
+mean(df_moderate_cc_t1$cc_rep_dummy[df_moderate_cc_t1$treat_cc_t1 ==1], na.rm=TRUE) - mean(df_moderate_cc_t1$cc_rep_dummy[df_moderate_cc_t1$treat_cc_t1 ==0], na.rm=TRUE) 
+
+mean(df_moderate_cc_t2$cc_rep_dummy[df_moderate_cc_t2$treat_cc_t2 ==1], na.rm=TRUE) - mean(df_moderate_cc_t2$cc_rep_dummy[df_moderate_cc_t2$treat_cc_t2 ==0], na.rm=TRUE) 
+
+print('dem selection')
+
+mean(df_moderate_dem_t1$dem_feelings_1[df_moderate_dem_t1$treat_debate_noah_t1  ==1], na.rm=TRUE) - mean(df_moderate_dem_t1$dem_feelings_1[df_moderate_dem_t1$treat_debate_noah_t1  ==0], na.rm=TRUE) 
+
+mean(df_moderate_dem_t2$dem_feelings_1[df_moderate_dem_t2$treat_debate_fox_t2  ==1], na.rm=TRUE) - mean(df_moderate_dem_t2$dem_feelings_1[df_moderate_dem_t2$treat_debate_fox_t2  ==0], na.rm=TRUE)
+
+print('health care')
+
+mean(df_moderate_health_t1$health_rep_dummy[df_moderate_health_t1$treat_health_approve_t1  ==1], na.rm=TRUE) - mean(df_moderate_health_t1$health_rep_dummy[df_moderate_health_t1$treat_health_approve_t1  ==0], na.rm=TRUE) 
+
+mean(df_moderate_health_t2$health_rep_dummy[df_moderate_health_t2$treat_health_disapprove_t2   ==1], na.rm=TRUE) - mean(df_moderate_health_t2$health_rep_dummy[df_moderate_health_t2$treat_health_disapprove_t2   ==0], na.rm=TRUE)
+
+print('impeachment')
+ 
+mean(df_moderate_impeach_t1$impeach_response1[df_moderate_impeach_t1$treat_impeach_approve_t1  ==1], na.rm=TRUE) - mean(df_moderate_impeach_t1$impeach_response1[df_moderate_impeach_t1$treat_impeach_approve_t1  ==0], na.rm=TRUE) 
+
+mean(df_moderate_impeach_t2$impeach_response1[df_moderate_impeach_t2$treat_impeach_demapprove_t   ==1], na.rm=TRUE) - mean(df_moderate_impeach_t2$impeach_response1[df_moderate_impeach_t2$treat_impeach_demapprove_t   ==0], na.rm=TRUE) 
+```
+
+
+
+Very liberal 
+```{r}
+#Climate Change
+df_vl_cc_t1 <-
+  df_cc_t1 %>% dplyr::filter(very_liberal == 1)
+df_vl_cc_t2 <-
+  df_cc_t2 %>% dplyr::filter(very_liberal == 1)
+
+#Democratic Selection
+df_vl_dem_t1 <-
+  df_dem_t1 %>% dplyr::filter(very_liberal == 1)
+df_vl_dem_t2 <-
+  df_dem_t2 %>% dplyr::filter(very_liberal == 1)
+
+#Health Care
+df_vl_health_t1 <-
+  df_health_t1 %>% dplyr::filter(very_liberal == 1)
+df_vl_health_t2 <-
+  df_health_t2 %>% dplyr::filter(very_liberal == 1)
+
+#Impeachment
+df_vl_impeach_t1 <-
+  df_impeach_t1 %>% dplyr::filter(very_liberal == 1)
+df_vl_impeach_t2 <-
+  df_impeach_t2 %>% dplyr::filter(very_liberal == 1)
+
+
+print('climate change')
+mean(df_vl_cc_t1$cc_rep_dummy[df_vl_cc_t1$treat_cc_t1 ==1], na.rm=TRUE) - mean(df_vl_cc_t1$cc_rep_dummy[df_vl_cc_t1$treat_cc_t1 ==0], na.rm=TRUE) 
+
+mean(df_vl_cc_t2$cc_rep_dummy[df_vl_cc_t2$treat_cc_t2 ==1], na.rm=TRUE) - mean(df_vl_cc_t2$cc_rep_dummy[df_vl_cc_t2$treat_cc_t2 ==0], na.rm=TRUE) 
+
+print('dem selection')
+
+mean(df_vl_dem_t1$dem_feelings_1[df_vl_dem_t1$treat_debate_noah_t1  ==1], na.rm=TRUE) - mean(df_vl_dem_t1$dem_feelings_1[df_vl_dem_t1$treat_debate_noah_t1  ==0], na.rm=TRUE) 
+
+mean(df_vl_dem_t2$dem_feelings_1[df_vl_dem_t2$treat_debate_fox_t2  ==1], na.rm=TRUE) - mean(df_vl_dem_t2$dem_feelings_1[df_vl_dem_t2$treat_debate_fox_t2  ==0], na.rm=TRUE)
+
+print('health care')
+
+mean(df_vl_health_t1$health_rep_dummy[df_vl_health_t1$treat_health_approve_t1  ==1], na.rm=TRUE) - mean(df_vl_health_t1$health_rep_dummy[df_vl_health_t1$treat_health_approve_t1  ==0], na.rm=TRUE) 
+
+mean(df_vl_health_t2$health_rep_dummy[df_vl_health_t2$treat_health_disapprove_t2   ==1], na.rm=TRUE) - mean(df_vl_health_t2$health_rep_dummy[df_vl_health_t2$treat_health_disapprove_t2   ==0], na.rm=TRUE)
+
+print('impeachment')
+ 
+mean(df_vl_impeach_t1$impeach_response1[df_vl_impeach_t1$treat_impeach_approve_t1  ==1], na.rm=TRUE) - mean(df_vl_impeach_t1$impeach_response1[df_vl_impeach_t1$treat_impeach_approve_t1  ==0], na.rm=TRUE) 
+
+mean(df_vl_impeach_t2$impeach_response1[df_vl_impeach_t2$treat_impeach_demapprove_t   ==1], na.rm=TRUE) - mean(df_vl_impeach_t2$impeach_response1[df_vl_impeach_t2$treat_impeach_demapprove_t   ==0], na.rm=TRUE) 
+```
+
+
+
+```{r}
+ggplot(df_vl_impeach_t1, aes(x=treat_impeach_approve_t1, y=impeach_response1)) + 
+  geom_jitter(width = 0.05, alpha = 0.85, color = "tomato",size = 3) + 
+  ggplot2::stat_summary(fun.data = "mean_cl_normal", 
+                        geom="crossbar", colour = "black", width = 0.2, aes(group = treat_impeach_approve_t1)) +
+  ggtitle("Impeachment Opinion Among Very Liberal") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5)) +
+  theme(axis.title = element_text()) + 
+      xlab("Treatment Group") +
+      ylab("Percentage Agree") +
+  scale_x_continuous(breaks=seq(0, 1, 1),
+                     labels=c("Control", "Treated 1")) +
+  scale_y_continuous("Response", breaks=seq(0,1, 1),labels = c("Other","Impeach and Remove")) +
+  theme(axis.text.y = element_text(angle = 90, hjust = .5)) +
+  theme(plot.margin = unit(c(1, 5.5, 1, 5.5), "cm")) 
+```
+
+
+
+
+```{r}
+ggplot(df_vl_impeach_t2, aes(x=treat_impeach_demapprove_t, y=impeach_response1)) + 
+  geom_jitter(width = 0.05, alpha = 0.85, color = "tomato",size = 3) + 
+  ggplot2::stat_summary(fun.data = "mean_cl_normal", 
+                        geom="crossbar", colour = "black", width = 0.2, aes(group = treat_impeach_demapprove_t)) +
+  ggtitle("Impeachment Opinion Among Very Liberal") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5)) +
+  theme(axis.title = element_text()) + 
+      xlab("Treatment Group") +
+      ylab("Percentage Agree") +
+  scale_x_continuous(breaks=seq(0, 1, 1),
+                     labels=c("Control", "Treated 2")) +
+  theme(plot.margin = unit(c(1, 5.5, 1, 5.5), "cm")) 
+```
+
+
+```{r}
+sum(df_vl_impeach_t2$impeach_response1, na.rm=T)
+
+df_vl_impeach_t2$impeach_response1[df_vl_impeach_t2$treat_impeach_demapprove_t==1]
+df_vl_impeach_t1$impeach_response1[df_vl_impeach_t1$impeach_response1]
+
+
+vl_impeach_t2 <- (df_vl_impeach_t2[df_vl_impeach_t2$treat_impeach_demapprove_t == 1, ])$impeach_response1
+vl_impeach_control <- (df_vl_impeach_t2[df_vl_impeach_t2$treat_impeach_demapprove_t == 0, ])$impeach_response1
+vl_impeach_t1 <- (df_vl_impeach_t1[df_vl_impeach_t1$treat_impeach_approve_t1 == 1, ])$impeach_response1
+
+
+  #character vector
+treat_vec <- c('vl_impeach_t2','vl_impeach_t2','vl_impeach_t2','vl_impeach_t2','vl_impeach_t2','vl_impeach_t2','vl_impeach_t2','vl_impeach_t2','vl_impeach_t2','vl_impeach_t2','vl_impeach_t2','vl_impeach_t2','vl_impeach_control','vl_impeach_control','vl_impeach_control','vl_impeach_control','vl_impeach_control','vl_impeach_control','vl_impeach_control','vl_impeach_control','vl_impeach_control','vl_impeach_control','vl_impeach_control','vl_impeach_control','vl_impeach_t1','vl_impeach_t1','vl_impeach_t1','vl_impeach_t1','vl_impeach_t1','vl_impeach_t1','vl_impeach_t1','vl_impeach_t1','vl_impeach_t1','vl_impeach_t1','vl_impeach_t1','vl_impeach_t1','vl_impeach_t1','vl_impeach_t1','vl_impeach_t1','vl_impeach_t1','vl_impeach_t1')
+
+
+impeach_rep <- c(1, 1, 1, 1, 1, 1, 1, 1, 1 ,1, 1, 1,
+1, 1, 1, 0, 1, 0 ,1 ,1 ,1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1 ,1 ,1 ,0 ,1 ,1, 1, 1, 1, 1, 1
+  )
+
+df_ggplot2 <- data.frame(treat_vec, impeach_rep)
+
+```
+
+
+
+
+
+
+```{r}
+ggplot(df_ggplot2, aes(x=treat_vec, y=impeach_rep)) + 
+  geom_jitter(width = 0.08, alpha = 0.85, color = "tomato",size = 3) + 
+  ggplot2::stat_summary(fun.data = "mean_cl_normal", 
+                        geom="crossbar", colour = "black", width = 0.3, aes(group = treat_vec)) +
+  ggtitle("Impeachment Opinion Among Very Liberal") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5)) +
+  theme(axis.title = element_text()) + 
+      xlab("Treatment Group") +
+      ylab("Percentage Agree") +
+  scale_x_discrete("Treatment Group", labels = c("vl_impeach_t1"= "Treated 1","vl_impeach_t2"="Treated 2",
+  "vl_impeach_control"="Control")) +
+  theme(plot.title = element_text(hjust = .5)) +
+  scale_y_continuous("Response", breaks=seq(0,1, 1),labels = c("Other","Impeach and Remove")) +
+  theme(axis.text.y = element_text(angle = 90, hjust = .5)) +
+  ylab("Impeach and Remove") +
+  theme(plot.margin = unit(c(1, 5, .2, 2), "cm")) 
+  
+
+```
+
+
+
+
+
+
+
+Liberals
+```{r}
+#Climate Change
+df_liberal_cc_t1 <-
+  df_cc_t1 %>% dplyr::filter(liberal == 1)
+df_liberal_cc_t2 <-
+  df_cc_t2 %>% dplyr::filter(liberal == 1)
+
+#Democratic Selection
+df_liberal_dem_t1 <-
+  df_dem_t1 %>% dplyr::filter(liberal == 1)
+df_liberal_dem_t2 <-
+  df_dem_t2 %>% dplyr::filter(liberal == 1)
+
+#Health Care
+df_liberal_health_t1 <-
+  df_health_t1 %>% dplyr::filter(liberal == 1)
+df_liberal_health_t2 <-
+  df_health_t2 %>% dplyr::filter(liberal == 1)
+
+#Impeachment
+df_liberal_impeach_t1 <-
+  df_impeach_t1 %>% dplyr::filter(liberal == 1)
+df_liberal_impeach_t2 <-
+  df_impeach_t2 %>% dplyr::filter(liberal == 1)
+
+
+print('climate change')
+mean(df_liberal_cc_t1$cc_rep_dummy[df_liberal_cc_t1$treat_cc_t1 ==1], na.rm=TRUE) - mean(df_liberal_cc_t1$cc_rep_dummy[df_liberal_cc_t1$treat_cc_t1 ==0], na.rm=TRUE) 
+
+mean(df_liberal_cc_t2$cc_rep_dummy[df_liberal_cc_t2$treat_cc_t2 ==1], na.rm=TRUE) - mean(df_liberal_cc_t2$cc_rep_dummy[df_liberal_cc_t2$treat_cc_t2 ==0], na.rm=TRUE) 
+
+print('dem selection')
+
+mean(df_liberal_dem_t1$dem_feelings_1[df_liberal_dem_t1$treat_debate_noah_t1  ==1], na.rm=TRUE) - mean(df_liberal_dem_t1$dem_feelings_1[df_liberal_dem_t1$treat_debate_noah_t1  ==0], na.rm=TRUE) 
+
+mean(df_liberal_dem_t2$dem_feelings_1[df_liberal_dem_t2$treat_debate_fox_t2  ==1], na.rm=TRUE) - mean(df_liberal_dem_t2$dem_feelings_1[df_liberal_dem_t2$treat_debate_fox_t2  ==0], na.rm=TRUE)
+
+print('health care')
+
+mean(df_liberal_health_t1$health_rep_dummy[df_liberal_health_t1$treat_health_approve_t1  ==1], na.rm=TRUE) - mean(df_liberal_health_t1$health_rep_dummy[df_liberal_health_t1$treat_health_approve_t1  ==0], na.rm=TRUE) 
+
+mean(df_liberal_health_t2$health_rep_dummy[df_liberal_health_t2$treat_health_disapprove_t2   ==1], na.rm=TRUE) - mean(df_liberal_health_t2$health_rep_dummy[df_liberal_health_t2$treat_health_disapprove_t2   ==0], na.rm=TRUE)
+
+print('impeachment')
+ 
+mean(df_liberal_impeach_t1$impeach_response1[df_liberal_impeach_t1$treat_impeach_approve_t1  ==1], na.rm=TRUE) - mean(df_liberal_impeach_t1$impeach_response1[df_liberal_impeach_t1$treat_impeach_approve_t1  ==0], na.rm=TRUE) 
+
+mean(df_liberal_impeach_t2$impeach_response1[df_liberal_impeach_t2$treat_impeach_demapprove_t   ==1], na.rm=TRUE) - mean(df_liberal_impeach_t2$impeach_response1[df_liberal_impeach_t2$treat_impeach_demapprove_t   ==0], na.rm=TRUE) 
+```
+
+
+Tables - by ideology
+
+```{r}
+summary_df <-
+  df_moderate_cc_t1 %>%
+  dplyr::group_by(treat_cc_t1) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(cc_rep_dummy, na.rm = T),
+  `Std. Dev.` = sd(cc_rep_dummy, na.rm = T),
+  `Std. Error of Mean` = sd(cc_rep_dummy, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(cc_rep_dummy, na.rm = T)^2 / n(),
+  `variance` = var(cc_rep_dummy, na.rm = T)/n() )
+
+summary_df %>%
+    select("treat_cc_t1","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n") %>%
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+
+```{r}
+summary_df <-
+  df_moderate_cc_t2 %>%
+  dplyr::group_by(treat_cc_t2) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(cc_rep_dummy, na.rm = T),
+  `Std. Dev.` = sd(cc_rep_dummy, na.rm = T),
+  `Std. Error of Mean` = sd(cc_rep_dummy, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(cc_rep_dummy, na.rm = T)^2 / n(),
+  `variance` = var(cc_rep_dummy, na.rm = T)/n() )
+
+summary_df %>%
+  select("treat_cc_t2","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+```{r}
+summary_df <-
+  df_moderate_dem_t1 %>%
+  dplyr::group_by(treat_debate_noah_t1) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(dem_feelings_1, na.rm = T),
+  `Std. Dev.` = sd(dem_feelings_1, na.rm = T),
+  `Std. Error of Mean` = sd(dem_feelings_1, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(dem_feelings_1, na.rm = T)^2 / n(),
+  `variance` = var(dem_feelings_1, na.rm = T)/n() )
+
+summary_df %>%
+  select("treat_debate_noah_t1","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n", "variance") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+```{r}
+summary_df <-
+  df_moderate_dem_t2 %>%
+  dplyr::group_by(treat_debate_fox_t2) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(dem_feelings_1, na.rm = T),
+  `Std. Dev.` = sd(dem_feelings_1, na.rm = T),
+  `Std. Error of Mean` = sd(dem_feelings_1, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(dem_feelings_1, na.rm = T)^2 / n(),
+  `variance` = var(dem_feelings_1, na.rm = T)/n() )
+
+summary_df %>%
+  select("treat_debate_fox_t2","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n", "variance") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+
+```{r}
+summary_df <-
+  df_moderate_health_t1 %>%
+  dplyr::group_by(treat_health_approve_t1) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(health_rep_dummy, na.rm = T),
+  `Std. Dev.` = sd(health_rep_dummy, na.rm = T),
+  `Std. Error of Mean` = sd(health_rep_dummy, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(health_rep_dummy, na.rm = T)^2 / n(),
+  `variance` = var(health_rep_dummy, na.rm = T)/n() )
+
+summary_df %>%
+  select("treat_health_approve_t1","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n", "variance") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+
+```{r}
+summary_df <-
+  df_moderate_health_t2 %>%
+  dplyr::group_by(treat_health_disapprove_t2) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(health_rep_dummy, na.rm = T),
+  `Std. Dev.` = sd(health_rep_dummy, na.rm = T),
+  `Std. Error of Mean` = sd(health_rep_dummy, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(health_rep_dummy, na.rm = T)^2 / n(),
+  `variance` = var(health_rep_dummy, na.rm = T)/n() )
+
+summary_df %>%
+  select("treat_health_disapprove_t2","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n", "variance") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+```{r}
+summary_df <-
+  df_liberal_impeach_t1 %>%
+  dplyr::group_by(treat_impeach_approve_t1) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(impeach_response1, na.rm = T),
+  `Std. Dev.` = sd(impeach_response1, na.rm = T),
+  `Std. Error of Mean` = sd(impeach_response1, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(impeach_response1, na.rm = T)^2 / n(),
+  `variance` = var(impeach_response1, na.rm = T)/n() )
+
+summary_df %>%
+  select("treat_impeach_approve_t1","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n", "variance") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+```{r}
+summary_df <-
+  df_liberal_impeach_t2 %>%
+  dplyr::group_by(treat_impeach_demapprove_t) %>%
+  dplyr::summarise(
+  `N` = n(),
+  `Mean` = mean(impeach_response1, na.rm = T),
+  `Std. Dev.` = sd(impeach_response1, na.rm = T),
+  `Std. Error of Mean` = sd(impeach_response1, na.rm = T)/sqrt(n()),
+  `Var/n` = sd(impeach_response1, na.rm = T)^2 / n(),
+  `variance` = var(impeach_response1, na.rm = T)/n() )
+
+summary_df %>%
+  select("treat_impeach_demapprove_t","N", "Mean", "Std. Dev.", "Std. Error of Mean", "Var/n", "variance") %>%
+  # print table nicely (optional) 
+  knitr::kable(format = "latex", digits = 4, align = rep("c", times = 6)) 
+  #kableExtra::kable_styling(latex_options = c("HOLD_position"), full_width = TRUE)
+  round(sqrt(summary_df$variance[2] + summary_df$variance[1]), digits = 3)
+```
+
+
